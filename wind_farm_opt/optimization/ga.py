@@ -98,6 +98,7 @@ class GeneticAlgorithm:
         boundary: SiteBoundary,
         fitness_fn: Callable[[np.ndarray], float],
         config: Optional[GAConfig] = None,
+        initial_positions: Optional[np.ndarray] = None,
     ) -> None:
         """
         Parameters
@@ -112,12 +113,28 @@ class GeneticAlgorithm:
             适应度函数，输入位置数组 (N_turb, 2)，返回净AEP
         config : Optional[GAConfig]
             算法配置参数
+        initial_positions : Optional[np.ndarray]
+            导入的初始布局 (N_turb, 2)；提供时作为种群的第一个个体
+            （经修复保证满足约束），使优化在勘测/设计方案基础上改进，
+            机位编号顺序保持不变。
         """
         self.n_turbines = n_turbines
         self.rotor_diameters = np.asarray(rotor_diameters, dtype=np.float64)
         self.boundary = boundary
         self.fitness_fn = fitness_fn
         self.config = config if config is not None else GAConfig()
+
+        self.initial_positions = (
+            np.asarray(initial_positions, dtype=np.float64).copy()
+            if initial_positions is not None else None
+        )
+        if self.initial_positions is not None and self.initial_positions.shape != (
+            n_turbines, 2
+        ):
+            raise ValueError(
+                f"初始布局形状 {self.initial_positions.shape} 与机位数 "
+                f"({n_turbines}, 2) 不匹配"
+            )
 
         self.rng = np.random.default_rng(self.config.seed)
 
@@ -140,11 +157,18 @@ class GeneticAlgorithm:
     def _initialize_population(self, pop_size: int) -> np.ndarray:
         """初始化种群。
 
-        每个个体是展平的位置向量：[x1, y1, x2, y2, ..., xn, yn]
+        每个个体是展平的位置向量：[x1, y1, x2, y2, ..., xn, yn]。
+        若提供了导入的初始布局，第一个个体使用该布局（经修复），
+        其余随机生成，保证优化从现有方案出发且编号顺序不变。
         """
         population = np.zeros((pop_size, self.n_dim), dtype=np.float64)
 
-        for i in range(pop_size):
+        start = 0
+        if self.initial_positions is not None:
+            population[0] = self._repair(self.initial_positions.flatten())
+            start = 1
+
+        for i in range(start, pop_size):
             positions = self._generate_valid_layout()
             population[i] = positions.flatten()
 

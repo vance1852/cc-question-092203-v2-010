@@ -46,6 +46,7 @@ def plot_farm_layout(
     title: str = "风电场机位布局",
     save_path: Optional[str] = None,
     show: bool = False,
+    display_origin: Optional[np.ndarray] = None,
 ) -> None:
     """绘制风电场机位布局俯视图。
 
@@ -69,13 +70,25 @@ def plot_farm_layout(
         保存路径
     show : bool
         是否显示图表
+    display_origin : Optional[np.ndarray]
+        绘图显示原点 (2,)。提供时图面坐标统一减去该原点，使投影带大坐标
+        （如东距 575000、北距 4540000）以场址局部小范围数字呈现，便于阅读；
+        不影响任何计算坐标。本地零坐标布局无需提供。
     """
     set_chinese_font()
+
+    if display_origin is None:
+        origin = np.zeros(2, dtype=np.float64)
+    else:
+        origin = np.asarray(display_origin, dtype=np.float64).reshape(2)
+
+    view_verts = boundary.vertices - origin
+    view_positions = np.asarray(positions, dtype=np.float64) - origin
 
     fig, ax = plt.subplots(figsize=(10, 8))
 
     poly = Polygon(
-        boundary.vertices,
+        view_verts,
         facecolor="lightgreen",
         edgecolor="darkgreen",
         linewidth=2,
@@ -88,7 +101,7 @@ def plot_farm_layout(
         norm = Normalize(vmin=0, vmax=max(30.0, np.max(turbine_losses)))
         cmap = plt.get_cmap("YlOrRd")
 
-        for i, (pos, d, loss) in enumerate(zip(positions, rotor_diameters, turbine_losses)):
+        for i, (pos, d, loss) in enumerate(zip(view_positions, rotor_diameters, turbine_losses)):
             color = cmap(norm(loss))
             circle = Circle(pos, d / 2.0, facecolor=color, edgecolor="black", linewidth=1.5, alpha=0.8)
             ax.add_patch(circle)
@@ -109,7 +122,7 @@ def plot_farm_layout(
         cbar = fig.colorbar(sm, ax=ax, fraction=0.046, pad=0.04)
         cbar.set_label("尾流损失 (%)")
     else:
-        for i, (pos, d) in enumerate(zip(positions, rotor_diameters)):
+        for i, (pos, d) in enumerate(zip(view_positions, rotor_diameters)):
             circle = Circle(pos, d / 2.0, facecolor="steelblue", edgecolor="darkblue", linewidth=1.5, alpha=0.7)
             ax.add_patch(circle)
 
@@ -129,27 +142,27 @@ def plot_farm_layout(
         for (up_idx, down_idx), intensity in wake_interactions.items():
             if intensity > 0.01:
                 ax.plot(
-                    [positions[up_idx, 0], positions[down_idx, 0]],
-                    [positions[up_idx, 1], positions[down_idx, 1]],
+                    [view_positions[up_idx, 0], view_positions[down_idx, 0]],
+                    [view_positions[up_idx, 1], view_positions[down_idx, 1]],
                     "r-",
                     alpha=min(0.8, intensity * 5),
                     linewidth=0.5 + intensity * 3,
                 )
 
     margin = 0.1
-    x_range = boundary.x_max - boundary.x_min
-    y_range = boundary.y_max - boundary.y_min
-    ax.set_xlim(
-        boundary.x_min - margin * x_range,
-        boundary.x_max + margin * x_range,
-    )
-    ax.set_ylim(
-        boundary.y_min - margin * y_range,
-        boundary.y_max + margin * y_range,
-    )
+    x_min, x_max = float(np.min(view_verts[:, 0])), float(np.max(view_verts[:, 0]))
+    y_min, y_max = float(np.min(view_verts[:, 1])), float(np.max(view_verts[:, 1]))
+    x_range = x_max - x_min
+    y_range = y_max - y_min
+    ax.set_xlim(x_min - margin * x_range, x_max + margin * x_range)
+    ax.set_ylim(y_min - margin * y_range, y_max + margin * y_range)
     ax.set_aspect("equal")
-    ax.set_xlabel("X 坐标 (m)")
-    ax.set_ylabel("Y 坐标 (m)")
+    if display_origin is not None:
+        ax.set_xlabel(f"相对东向距离 (m，原点东距 {origin[0]:.1f})")
+        ax.set_ylabel(f"相对北向距离 (m，原点北距 {origin[1]:.1f})")
+    else:
+        ax.set_xlabel("X 坐标 (m)")
+        ax.set_ylabel("Y 坐标 (m)")
     ax.set_title(title, fontsize=14, fontweight="bold")
     ax.grid(True, alpha=0.3)
     ax.legend(loc="upper right")
@@ -429,6 +442,7 @@ def plot_turbine_loss_bar(
     title: str = "各风机尾流损失",
     save_path: Optional[str] = None,
     show: bool = False,
+    turbine_labels: Optional[list[str]] = None,
 ) -> None:
     """绘制各风机尾流损失柱状图。
 
@@ -442,6 +456,8 @@ def plot_turbine_loss_bar(
         保存路径
     show : bool
         是否显示图表
+    turbine_labels : Optional[list[str]]
+        各机位的显示编号；默认使用 0 基序号。
     """
     set_chinese_font()
 
@@ -452,6 +468,11 @@ def plot_turbine_loss_bar(
     loss_pcts = [tr.wake_loss_pct for tr in farm_result.turbine_results]
     net_aeps = [tr.net_aep for tr in farm_result.turbine_results]
 
+    if turbine_labels is None or len(turbine_labels) != n_turb:
+        labels = [f"#{i}" for i in indices]
+    else:
+        labels = list(turbine_labels)
+
     bars = ax.bar(indices, loss_pcts, color="salmon", edgecolor="darkred", alpha=0.8)
 
     for i, (bar, loss) in enumerate(zip(bars, loss_pcts)):
@@ -459,8 +480,8 @@ def plot_turbine_loss_bar(
         tr = farm_result.turbine_results[i]
         dom_source = tr.dominant_wake_source
         label = f"{loss:.1f}%"
-        if dom_source is not None:
-            label += f"\n(#{dom_source})"
+        if dom_source is not None and 0 <= dom_source < n_turb:
+            label += f"\n({labels[dom_source]})"
         ax.text(
             bar.get_x() + bar.get_width() / 2.0,
             height + 0.3,
@@ -483,7 +504,7 @@ def plot_turbine_loss_bar(
     ax.set_ylabel("尾流损失 (%)")
     ax.set_title(title, fontsize=14, fontweight="bold")
     ax.set_xticks(indices)
-    ax.set_xticklabels([f"#{i}" for i in indices], fontsize=8)
+    ax.set_xticklabels(labels, fontsize=8)
     ax.grid(True, alpha=0.3, axis="y")
     ax.legend(loc="upper right")
 
@@ -597,6 +618,7 @@ def plot_wake_heatmap(
     title: str = "尾流速度亏损分布",
     save_path: Optional[str] = None,
     show: bool = False,
+    display_origin: Optional[np.ndarray] = None,
 ) -> None:
     """绘制尾流速度亏损热力图（单一风向）。
 
@@ -622,8 +644,15 @@ def plot_wake_heatmap(
         保存路径
     show : bool
         是否显示图表
+    display_origin : Optional[np.ndarray]
+        绘图显示原点 (2,)，仅用于把投影带大坐标显示为场址局部小数字。
     """
     set_chinese_font()
+
+    if display_origin is None:
+        origin = np.zeros(2, dtype=np.float64)
+    else:
+        origin = np.asarray(display_origin, dtype=np.float64).reshape(2)
 
     fig, ax = plt.subplots(figsize=(10, 8))
 
@@ -683,15 +712,16 @@ def plot_wake_heatmap(
 
     deficit_masked = np.ma.masked_where(mask, deficit_field)
 
+    Xv, Yv = X - origin[0], Y - origin[1]
     contour = ax.contourf(
-        X, Y, deficit_masked * 100,
+        Xv, Yv, deficit_masked * 100,
         levels=np.linspace(0, 50, 21),
         cmap="hot_r",
         alpha=0.7,
     )
 
     poly = Polygon(
-        boundary.vertices,
+        boundary.vertices - origin,
         facecolor="none",
         edgecolor="black",
         linewidth=2,
@@ -699,12 +729,12 @@ def plot_wake_heatmap(
     ax.add_patch(poly)
 
     for pos, d in zip(positions, rotor_diameters):
-        circle = Circle(pos, d / 2.0, facecolor="white", edgecolor="blue", linewidth=2)
+        circle = Circle(pos - origin, d / 2.0, facecolor="white", edgecolor="blue", linewidth=2)
         ax.add_patch(circle)
 
     ax.quiver(
-        boundary.x_max - 200,
-        boundary.y_max - 200,
+        boundary.x_max - 200 - origin[0],
+        boundary.y_max - 200 - origin[1],
         wind_vec[0],
         wind_vec[1],
         scale=5,
@@ -712,8 +742,8 @@ def plot_wake_heatmap(
         color="blue",
     )
     ax.text(
-        boundary.x_max - 200,
-        boundary.y_max - 400,
+        boundary.x_max - 200 - origin[0],
+        boundary.y_max - 400 - origin[1],
         f"风向 {wind_direction:.0f}°",
         ha="center",
         va="top",
@@ -725,8 +755,12 @@ def plot_wake_heatmap(
     cbar.set_label("速度亏损 (%)")
 
     ax.set_aspect("equal")
-    ax.set_xlabel("X 坐标 (m)")
-    ax.set_ylabel("Y 坐标 (m)")
+    if display_origin is not None:
+        ax.set_xlabel(f"相对东向距离 (m，原点东距 {origin[0]:.1f})")
+        ax.set_ylabel(f"相对北向距离 (m，原点北距 {origin[1]:.1f})")
+    else:
+        ax.set_xlabel("X 坐标 (m)")
+        ax.set_ylabel("Y 坐标 (m)")
     ax.set_title(title, fontsize=14, fontweight="bold")
 
     plt.tight_layout()

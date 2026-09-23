@@ -60,12 +60,25 @@ class ParticleSwarmOptimizer:
         boundary: SiteBoundary,
         fitness_fn: Callable[[np.ndarray], float],
         config: Optional[PSOConfig] = None,
+        initial_positions: Optional[np.ndarray] = None,
     ) -> None:
         self.n_turbines = n_turbines
         self.rotor_diameters = np.asarray(rotor_diameters, dtype=np.float64)
         self.boundary = boundary
         self.fitness_fn = fitness_fn
         self.config = config if config is not None else PSOConfig()
+
+        self.initial_positions = (
+            np.asarray(initial_positions, dtype=np.float64).copy()
+            if initial_positions is not None else None
+        )
+        if self.initial_positions is not None and self.initial_positions.shape != (
+            n_turbines, 2
+        ):
+            raise ValueError(
+                f"初始布局形状 {self.initial_positions.shape} 与机位数 "
+                f"({n_turbines}, 2) 不匹配"
+            )
 
         self.rng = np.random.default_rng(self.config.seed)
 
@@ -99,11 +112,20 @@ class ParticleSwarmOptimizer:
         self.mean_history: list[float] = []
 
     def _initialize_swarm(self, swarm_size: int) -> tuple[np.ndarray, np.ndarray]:
-        """初始化粒子群。"""
+        """初始化粒子群。
+
+        若提供了导入的初始布局，第一个粒子使用该布局（经修复），
+        其余随机生成，机位编号顺序保持不变。
+        """
         positions = np.zeros((swarm_size, self.n_dim), dtype=np.float64)
         velocities = np.zeros((swarm_size, self.n_dim), dtype=np.float64)
 
-        for i in range(swarm_size):
+        start = 0
+        if self.initial_positions is not None:
+            positions[0] = self._repair(self.initial_positions.flatten())
+            start = 1
+
+        for i in range(start, swarm_size):
             pos = self._generate_valid_layout()
             positions[i] = pos.flatten()
             velocities[i] = self.rng.uniform(

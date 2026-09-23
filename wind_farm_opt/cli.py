@@ -13,10 +13,11 @@ from typing import Optional
 import numpy as np
 
 from .config import WindFarmConfig, create_sample_config
-from .core.turbine import Turbine
+from .core.turbine import Turbine, create_default_turbine
 from .core.wind_resource import WindResource
 from .core.wake import WakeModel
 from .constraints.boundary import SiteBoundary
+from .constraints.spacing import compute_min_spacing_from_diameters
 from .farm.aep import AEPCalculator, FarmResult
 from .optimization.baseline import generate_grid_layout
 from .optimization.ga import GeneticAlgorithm, GAConfig
@@ -36,17 +37,48 @@ from .visualization.plotting import (
     plot_comparison,
     plot_wake_heatmap,
 )
+from .geospatial import (
+    ImportedSite,
+    export_geojson,
+    import_geojson,
+)
 
 
 class WindFarmOptimizerCLI:
     """风电场优化命令行接口主类。"""
 
-    def __init__(self, config: WindFarmConfig) -> None:
+    def __init__(
+        self,
+        config: WindFarmConfig,
+        imported_site: Optional[ImportedSite] = None,
+        export_geojson_path: Optional[str] = None,
+    ) -> None:
         self.config = config
+        self.imported_site = imported_site
+        self.export_geojson_path = export_geojson_path
         self._setup_output_dir()
 
-        self.turbines = config.create_turbines()
-        self.boundary = config.create_boundary()
+        if imported_site is not None:
+            # GeoJSON 导入模式：场界、机位数量与初始布局来自源文件，
+            # 全部已在本地米制计算坐标系中；配置中的本地坐标参数不参与。
+            self.boundary = imported_site.boundary
+            n = len(imported_site.turbine_ids)
+            self.config.n_turbines = n
+            self.turbine_ids = list(imported_site.turbine_ids)
+            self.turbines = config.create_turbines()
+            self.imported_positions = imported_site.positions
+            # 图面显示原点：场界西南角，仅用于把投影带大坐标显示为局部小数字。
+            self.display_origin = np.array(
+                [self.boundary.x_min, self.boundary.y_min], dtype=np.float64
+            )
+        else:
+            # 原有本地坐标模式，行为完全保持不变。
+            self.turbines = config.create_turbines()
+            self.boundary = config.create_boundary()
+            self.turbine_ids = [str(i) for i in range(config.n_turbines)]
+            self.imported_positions = None
+            self.display_origin = None
+
         self.wind_resource = config.create_wind_resource()
         self.wake_model = config.create_wake_model()
 
@@ -97,19 +129,27 @@ class WindFarmOptimizerCLI:
             print(f"    主要影响源: #{max_loss_turb.dominant_wake_source}")
 
     def run_baseline(self) -> None:
-        """运行基线（规则网格布局）评估。"""
-        self._print_header("步骤 1/6: 生成并评估基线网格布局")
+        """运行基线评估。
 
-        rng = np.random.default_rng(self.config.optimization.seed)
-        self.baseline_positions = generate_grid_layout(
-            boundary=self.boundary,
-            n_turbines=self.config.n_turbines,
-            rotor_diameters=self.rotor_diameters,
-            min_multiple=self.config.optimization.min_spacing_multiple,
-            rng=rng,
-        )
+        GeoJSON 导入模式下，基线即勘测/设计交回的原始布局（已通过边界与
+        间距检查），用于与优化结果对比；本地坐标模式仍生成规则网格。
+        """
+        if self.imported_positions is not None:
+            self._print_header("步骤 1/6: 评估导入的原始机位布局")
+            self.baseline_positions = self.imported_positions.copy()
+            print(f"已载入 {self.config.n_turbines} 台风机的 GeoJSON 原始布局")
+        else:
+            self._print_header("步骤 1/6: 生成并评估基线网格布局")
 
-        print(f"已生成 {self.config.n_turbines} 台风机的网格布局")
+            rng = np.random.default_rng(self.config.optimization.seed)
+            self.baseline_positions = generate_grid_layout(
+                boundary=self.boundary,
+                n_turbines=self.config.n_turbines,
+                rotor_diameters=self.rotor_diameters,
+                min_multiple=self.config.optimization.min_spacing_multiple,
+                rng=rng,
+            )
+            print(f"已生成 {self.config.n_turbines} 台风机的网格布局")
 
         self.baseline_result = self.aep_calc.compute_farm_aep(self.baseline_positions)
         self._print_result_summary(self.baseline_result, "基线布局")
@@ -135,6 +175,7 @@ class WindFarmOptimizerCLI:
                 boundary=self.boundary,
                 fitness_fn=fit_fn,
                 config=ga_config,
+                initial_positions=self.imported_positions,
             )
         elif algo == "pso":
             pso_config = PSOConfig(
@@ -149,6 +190,7 @@ class WindFarmOptimizerCLI:
                 boundary=self.boundary,
                 fitness_fn=fit_fn,
                 config=pso_config,
+                initial_positions=self.imported_positions,
             )
         else:
             raise ValueError(f"未知的优化算法: {algo}")
@@ -315,15 +357,21 @@ class WindFarmOptimizerCLI:
 
         if self.baseline_positions is not None and self.baseline_result is not None:
             baseline_losses = np.array([tr.wake_loss_pct for tr in self.baseline_result.turbine_results])
+            baseline_title = (
+                "导入原始布局 - 尾流损失分布"
+                if self.imported_site is not None
+                else "基线网格布局 - 尾流损失分布"
+            )
             plot_farm_layout(
                 positions=self.baseline_positions,
                 boundary=self.boundary,
                 rotor_diameters=self.rotor_diameters,
                 turbine_losses=baseline_losses,
-                turbine_names=[f"#{i}" for i in range(len(self.baseline_positions))],
-                title="基线网格布局 - 尾流损失分布",
+                turbine_names=list(self.turbine_ids),
+                title=baseline_title,
                 save_path=os.path.join(save_dir, "baseline_layout.png") if save else None,
                 show=show,
+                display_origin=self.display_origin,
             )
 
             plot_turbine_loss_bar(
@@ -331,6 +379,7 @@ class WindFarmOptimizerCLI:
                 title="基线布局 - 各风机尾流损失",
                 save_path=os.path.join(save_dir, "baseline_losses.png") if save else None,
                 show=show,
+                turbine_labels=list(self.turbine_ids),
             )
 
         if self.optimized_positions is not None and self.optimized_result is not None:
@@ -340,10 +389,11 @@ class WindFarmOptimizerCLI:
                 boundary=self.boundary,
                 rotor_diameters=self.rotor_diameters,
                 turbine_losses=opt_losses,
-                turbine_names=[f"#{i}" for i in range(len(self.optimized_positions))],
+                turbine_names=list(self.turbine_ids),
                 title="优化后布局 - 尾流损失分布",
                 save_path=os.path.join(save_dir, "optimized_layout.png") if save else None,
                 show=show,
+                display_origin=self.display_origin,
             )
 
             plot_turbine_loss_bar(
@@ -393,6 +443,7 @@ class WindFarmOptimizerCLI:
                 title=f"主风向({dominant_dir:.0f}°)尾流速度亏损分布",
                 save_path=os.path.join(save_dir, "wake_heatmap.png") if save else None,
                 show=show,
+                display_origin=self.display_origin,
             )
 
     def save_results(self) -> None:
@@ -414,9 +465,34 @@ class WindFarmOptimizerCLI:
             },
         }
 
+        if self.imported_site is not None:
+            summary = self.imported_site.summary
+            results["coordinate_transform"] = {
+                "source_file": getattr(self, "import_source_path", None),
+                "source_crs": summary.source_crs,
+                "source_crs_kind": summary.source_crs_kind,
+                "source_crs_declared_in": summary.source_crs_declared_in,
+                "source_crs_assumed": summary.source_crs_assumed,
+                "target_metric_crs": summary.metric_crs,
+                "metric_crs_family": summary.metric_crs_family,
+                "zone_label": summary.zone_label,
+                "source_bounds_lonlat": summary.source_bounds_lonlat,
+                "forward_chain": summary.forward_chain,
+                "inverse_chain": summary.inverse_chain,
+                "import_roundtrip_max_error_m": summary.roundtrip_max_error_m,
+                "roundtrip_tolerance_m": summary.roundtrip_tolerance_m,
+                "n_check_points": summary.n_check_points,
+                "boundary_tolerance_m": self.imported_site.boundary_tolerance_m,
+                "near_boundary_turbine_ids": self.imported_site.near_boundary_ids,
+                "source_dimension": self.imported_site.source_dimension,
+                "datum_note": summary.datum_note,
+                "exported_geojson": None,
+            }
+
         if self.baseline_result is not None:
             results["baseline"] = {
                 "positions": self.baseline_positions.tolist() if self.baseline_positions is not None else None,
+                "turbine_ids": list(self.turbine_ids),
                 "gross_aep_gwh": float(self.baseline_result.gross_aep / 1e3),
                 "net_aep_gwh": float(self.baseline_result.net_aep / 1e3),
                 "wake_loss_pct": float(self.baseline_result.wake_loss_pct),
@@ -424,6 +500,8 @@ class WindFarmOptimizerCLI:
                 "turbine_losses": [
                     {
                         "idx": tr.turbine_idx,
+                        "turbine_id": self.turbine_ids[tr.turbine_idx]
+                        if tr.turbine_idx < len(self.turbine_ids) else str(tr.turbine_idx),
                         "wake_loss_pct": float(tr.wake_loss_pct),
                         "dominant_source": tr.dominant_wake_source,
                     }
@@ -434,6 +512,7 @@ class WindFarmOptimizerCLI:
         if self.optimized_result is not None:
             results["optimized"] = {
                 "positions": self.optimized_positions.tolist() if self.optimized_positions is not None else None,
+                "turbine_ids": list(self.turbine_ids),
                 "gross_aep_gwh": float(self.optimized_result.gross_aep / 1e3),
                 "net_aep_gwh": float(self.optimized_result.net_aep / 1e3),
                 "wake_loss_pct": float(self.optimized_result.wake_loss_pct),
@@ -441,6 +520,8 @@ class WindFarmOptimizerCLI:
                 "turbine_losses": [
                     {
                         "idx": tr.turbine_idx,
+                        "turbine_id": self.turbine_ids[tr.turbine_idx]
+                        if tr.turbine_idx < len(self.turbine_ids) else str(tr.turbine_idx),
                         "wake_loss_pct": float(tr.wake_loss_pct),
                         "dominant_source": tr.dominant_wake_source,
                     }
@@ -489,6 +570,59 @@ class WindFarmOptimizerCLI:
 
         print(f"结果已保存到: {os.path.abspath(results_path)}")
         print(f"配置已保存到: {os.path.abspath(config_path)}")
+
+        if self.imported_site is not None:
+            self._export_optimized_geojson(output_dir, results)
+            # 回写导出文件路径到 results.json
+            with open(results_path, "w", encoding="utf-8") as f:
+                json.dump(results, f, indent=2, ensure_ascii=False)
+
+    def _export_optimized_geojson(self, output_dir: str, results: dict) -> None:
+        """把优化后布局逆变换回源坐标系并导出 GeoJSON。"""
+        if self.optimized_positions is not None:
+            positions = self.optimized_positions
+            stage = "optimized"
+            farm_result = self.optimized_result
+            filename = "optimized_layout.geojson"
+        elif self.baseline_positions is not None:
+            # --no-optimization 时导出评估后的原始布局
+            positions = self.baseline_positions
+            stage = "imported"
+            farm_result = self.baseline_result
+            filename = "evaluated_layout.geojson"
+        else:
+            return
+
+        out_path = self.export_geojson_path or os.path.join(output_dir, filename)
+
+        attrs: dict[str, dict] = {}
+        if farm_result is not None:
+            for tr in farm_result.turbine_results:
+                tid = (
+                    self.turbine_ids[tr.turbine_idx]
+                    if tr.turbine_idx < len(self.turbine_ids)
+                    else str(tr.turbine_idx)
+                )
+                attrs[tid] = {
+                    "net_aep_mwh": float(tr.net_aep),
+                    "wake_loss_pct": float(tr.wake_loss_pct),
+                    "capacity_factor_pct": float(tr.capacity_factor),
+                }
+
+        export_geojson(
+            site=self.imported_site,
+            metric_positions=positions,
+            output_path=out_path,
+            turbine_ids=list(self.turbine_ids),
+            turbine_attributes=attrs,
+            layout_stage=stage,
+            extra_boundary_properties={
+                "turbine_count": len(self.turbine_ids),
+                "turbine_model": self.config.turbine_model,
+            },
+        )
+        results["coordinate_transform"]["exported_geojson"] = os.path.abspath(out_path)
+        print(f"GeoJSON 布局已导出（源坐标系）: {os.path.abspath(out_path)}")
 
     def run_full_analysis(
         self,
@@ -726,6 +860,51 @@ def build_argparser() -> argparse.ArgumentParser:
         help="生成示例配置文件并退出",
     )
 
+    # ---- GeoJSON 导入导出 ----
+    parser.add_argument(
+        "--import-geojson",
+        type=str,
+        default=None,
+        help="导入场界/机位 GeoJSON 文件路径；提供后忽略配置中的本地坐标边界",
+    )
+    parser.add_argument(
+        "--source-crs",
+        type=str,
+        default=None,
+        help="源坐标参考系，覆盖 GeoJSON crs 成员，如 EPSG:4326、EPSG:32650",
+    )
+    parser.add_argument(
+        "--metric-crs",
+        type=str,
+        default=None,
+        help="显式指定米制计算坐标系，如 EPSG:32650；默认按场址自动选带",
+    )
+    parser.add_argument(
+        "--metric-crs-preference",
+        type=str,
+        default="auto",
+        choices=["auto", "cgcs2000", "utm"],
+        help="自动选带偏好：auto（中国境内 CGCS2000 三度带，境外 UTM）/ cgcs2000 / utm",
+    )
+    parser.add_argument(
+        "--export-geojson",
+        type=str,
+        default=None,
+        help="优化后 GeoJSON 导出路径（默认写入输出目录 optimized_layout.geojson）",
+    )
+    parser.add_argument(
+        "--boundary-tolerance",
+        type=float,
+        default=0.5,
+        help="导入机位边界判定容差（米），默认 0.5",
+    )
+    parser.add_argument(
+        "--roundtrip-tolerance",
+        type=float,
+        default=1e-3,
+        help="坐标正反变换往返残差容差（米），默认 0.001",
+    )
+
     return parser
 
 
@@ -782,7 +961,56 @@ def main() -> int:
     if args.no_economic:
         config.economic.enable_analysis = False
 
-    cli = WindFarmOptimizerCLI(config)
+    imported_site = None
+    if args.import_geojson:
+        # GeoJSON 导入模式：机位数量由文件决定，命令行 --n-turbines 不适用。
+        # 间距检查使用当前配置的最小间距倍数对应的米数。
+        probe_turbine = create_default_turbine(config.turbine_model)
+        min_spacing_m = compute_min_spacing_from_diameters(
+            np.array([probe_turbine.rotor_diameter]),
+            config.optimization.min_spacing_multiple,
+        )
+        try:
+            imported_site = import_geojson(
+                path=args.import_geojson,
+                source_crs=args.source_crs,
+                metric_crs=args.metric_crs,
+                metric_preference=args.metric_crs_preference,
+                min_spacing_m=min_spacing_m,
+                boundary_tolerance_m=args.boundary_tolerance,
+                roundtrip_tolerance_m=args.roundtrip_tolerance,
+                require_turbines=True,
+            )
+        except Exception as e:
+            print(f"\nGeoJSON 导入失败: {e}", file=sys.stderr)
+            return 2
+
+        s = imported_site.summary
+        print("=" * 60)
+        print("  GeoJSON 场址导入")
+        print("=" * 60)
+        print(f"  源坐标系:     {s.source_crs}（{s.source_crs_kind}，"
+              f"{'声明' if not s.source_crs_assumed else 'RFC7946 默认'}）")
+        print(f"  米制坐标系:   {s.metric_crs}（{s.zone_label}）")
+        print(f"  转换链路:     {s.forward_chain}")
+        print(f"  往返最大残差: {s.roundtrip_max_error_m:.3e} m"
+              f"（容差 {s.roundtrip_tolerance_m:g} m）")
+        print(f"  机位数量:     {len(imported_site.turbine_ids)}")
+        if imported_site.near_boundary_ids:
+            print(f"  贴边机位:     {', '.join(imported_site.near_boundary_ids)}")
+        if s.datum_note:
+            print(f"  基准提示:     {s.datum_note}")
+
+        if args.sweep:
+            print("提示: GeoJSON 导入模式机位数量固定，已跳过台数扫描。")
+
+    cli = WindFarmOptimizerCLI(
+        config,
+        imported_site=imported_site,
+        export_geojson_path=args.export_geojson,
+    )
+    if imported_site is not None:
+        cli.import_source_path = os.path.abspath(args.import_geojson)
     cli._min_turbines = args.min_turbines
     cli._max_turbines = args.max_turbines
 
@@ -791,7 +1019,7 @@ def main() -> int:
             run_baseline=True,
             run_opt=not args.no_optimization,
             run_econ=not args.no_economic,
-            run_sweep=args.sweep,
+            run_sweep=args.sweep and imported_site is None,
             run_viz=not args.no_plots,
             save=True,
         )

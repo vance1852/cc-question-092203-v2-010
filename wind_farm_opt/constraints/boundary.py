@@ -13,16 +13,19 @@ import numpy as np
 class SiteBoundary:
     """场地边界类。
 
-    使用闭合多边形定义场地范围。
+    使用闭合多边形定义场地范围，可选若干内环表示禁建区（孔洞）。
 
     Parameters
     ----------
     vertices : np.ndarray
-        多边形顶点坐标，形状为 (N, 2)，单位为米。
+        多边形外环顶点坐标，形状为 (N, 2)，单位为米。
         多边形会自动闭合，不需要重复起点。
+    holes : Optional[list[np.ndarray]]
+        内环（孔洞）顶点列表，每个数组形状为 (K, 2)。孔洞内的点视为场外。
     """
 
     vertices: np.ndarray
+    holes: Optional[list] = None
 
     def __post_init__(self) -> None:
         self.vertices = np.asarray(self.vertices, dtype=np.float64)
@@ -30,6 +33,17 @@ class SiteBoundary:
             raise ValueError("顶点坐标必须是形状为 (N, 2) 的数组")
         if self.vertices.shape[0] < 3:
             raise ValueError("多边形至少需要3个顶点")
+
+        if self.holes is None:
+            self.holes = []
+        else:
+            normalized = []
+            for h in self.holes:
+                arr = np.asarray(h, dtype=np.float64)
+                if arr.ndim != 2 or arr.shape[1] != 2 or arr.shape[0] < 3:
+                    raise ValueError("每个内环必须是形状为 (K>=3, 2) 的数组")
+                normalized.append(arr)
+            self.holes = normalized
 
     @property
     def x_min(self) -> float:
@@ -49,22 +63,28 @@ class SiteBoundary:
 
     @property
     def area(self) -> float:
-        """使用 shoelace 公式计算多边形面积。"""
-        x = self.vertices[:, 0]
-        y = self.vertices[:, 1]
+        """使用 shoelace 公式计算多边形面积（扣除内环孔洞）。"""
+        return self._ring_area(self.vertices) - sum(
+            self._ring_area(h) for h in self.holes
+        )
+
+    @staticmethod
+    def _ring_area(ring: np.ndarray) -> float:
+        x = ring[:, 0]
+        y = ring[:, 1]
         n = len(x)
         area = 0.0
         for i in range(n):
             j = (i + 1) % n
             area += x[i] * y[j] - x[j] * y[i]
-        return float(abs(area) / 2.0)
+        return abs(area) / 2.0
 
     def contains_point(
         self,
         point: np.ndarray,
         tolerance: float = 1e-9,
     ) -> bool:
-        """判断点是否在多边形内部（射线法）。
+        """判断点是否在多边形内部（射线法），内环孔洞内视为场外。
 
         Parameters
         ----------
@@ -76,17 +96,34 @@ class SiteBoundary:
         Returns
         -------
         bool
-            True 表示点在多边形内部或边界上
+            True 表示点在多边形内部或外环边界上，且不在内环孔洞内
         """
         pt = np.asarray(point, dtype=np.float64)
-        verts = self.vertices
 
         if self._on_edge(pt, tolerance):
             return True
 
+        if not self._point_in_ring(pt, self.vertices, tolerance):
+            return False
+
+        for hole in self.holes:
+            if self._point_in_ring(pt, hole, tolerance) and not self._point_on_ring_edge(
+                pt, hole, tolerance
+            ):
+                return False
+
+        return True
+
+    @staticmethod
+    def _point_in_ring(
+        point: np.ndarray,
+        verts: np.ndarray,
+        tolerance: float = 1e-9,
+    ) -> bool:
+        """射线法判断点是否在单个环内（含边界）。"""
         n = len(verts)
         inside = False
-        x, y = pt[0], pt[1]
+        x, y = point[0], point[1]
 
         for i in range(n):
             j = (i + 1) % n
@@ -101,13 +138,25 @@ class SiteBoundary:
         return inside
 
     def _on_edge(self, point: np.ndarray, tolerance: float) -> bool:
-        """检查点是否在多边形边界上。"""
-        verts = self.vertices
-        n = len(verts)
+        """检查点是否在外环或任一内环边界上。"""
+        if self._point_on_ring_edge(point, self.vertices, tolerance):
+            return True
+        for hole in self.holes:
+            if self._point_on_ring_edge(point, hole, tolerance):
+                return True
+        return False
 
+    @staticmethod
+    def _point_on_ring_edge(
+        point: np.ndarray,
+        verts: np.ndarray,
+        tolerance: float,
+    ) -> bool:
+        """检查点是否在指定环的边界上。"""
+        n = len(verts)
         for i in range(n):
             j = (i + 1) % n
-            if self._point_on_segment(point, verts[i], verts[j], tolerance):
+            if SiteBoundary._point_on_segment(point, verts[i], verts[j], tolerance):
                 return True
         return False
 
@@ -168,19 +217,19 @@ class SiteBoundary:
             投影后的点坐标，形状为 (2,)
         """
         pt = np.asarray(point, dtype=np.float64)
-        verts = self.vertices
-        n = len(verts)
 
         best_dist = np.inf
-        best_point = verts[0].copy()
+        best_point = self.vertices[0].copy()
 
-        for i in range(n):
-            j = (i + 1) % n
-            proj = self._project_to_segment(pt, verts[i], verts[j])
-            dist = np.linalg.norm(pt - proj)
-            if dist < best_dist:
-                best_dist = dist
-                best_point = proj
+        for ring in [self.vertices, *self.holes]:
+            n = len(ring)
+            for i in range(n):
+                j = (i + 1) % n
+                proj = self._project_to_segment(pt, ring[i], ring[j])
+                dist = np.linalg.norm(pt - proj)
+                if dist < best_dist:
+                    best_dist = dist
+                    best_point = proj
 
         return best_point
 
