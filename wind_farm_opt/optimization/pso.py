@@ -60,12 +60,15 @@ class ParticleSwarmOptimizer:
         boundary: SiteBoundary,
         fitness_fn: Callable[[np.ndarray], float],
         config: Optional[PSOConfig] = None,
+        initial_positions: Optional[np.ndarray] = None,
     ) -> None:
         self.n_turbines = n_turbines
         self.rotor_diameters = np.asarray(rotor_diameters, dtype=np.float64)
         self.boundary = boundary
         self.fitness_fn = fitness_fn
         self.config = config if config is not None else PSOConfig()
+
+        self.initial_positions = self._check_seed(initial_positions)
 
         self.rng = np.random.default_rng(self.config.seed)
 
@@ -98,12 +101,34 @@ class ParticleSwarmOptimizer:
         self.convergence_history: list[float] = []
         self.mean_history: list[float] = []
 
+    def _check_seed(self, positions: Optional[np.ndarray]) -> Optional[np.ndarray]:
+        """校验种子布局（通常来自 GeoJSON 导入）。"""
+        if positions is None:
+            return None
+        positions = np.asarray(positions, dtype=np.float64)
+        if positions.shape != (self.n_turbines, 2):
+            raise ValueError(
+                f"种子布局形状 {positions.shape} 与要求的 "
+                f"({self.n_turbines}, 2) 不一致"
+            )
+        if not np.all(np.isfinite(positions)):
+            raise ValueError("种子布局包含非有限坐标")
+        return positions.copy()
+
     def _initialize_swarm(self, swarm_size: int) -> tuple[np.ndarray, np.ndarray]:
-        """初始化粒子群。"""
+        """初始化粒子群。
+
+        若构造时提供了种子布局，第一个粒子从该位置出发，其初始速度置零。
+        """
         positions = np.zeros((swarm_size, self.n_dim), dtype=np.float64)
         velocities = np.zeros((swarm_size, self.n_dim), dtype=np.float64)
 
-        for i in range(swarm_size):
+        start = 0
+        if self.initial_positions is not None:
+            positions[0] = self.initial_positions.flatten()
+            start = 1
+
+        for i in range(start, swarm_size):
             pos = self._generate_valid_layout()
             positions[i] = pos.flatten()
             velocities[i] = self.rng.uniform(

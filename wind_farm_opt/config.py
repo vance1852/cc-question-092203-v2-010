@@ -48,6 +48,34 @@ class EconomicConfig:
 
 
 @dataclass
+class GeoConfig:
+    """GeoJSON 地理数据导入导出配置。
+
+    所有字段均为可选项：不配置时系统仍使用原有的本地米制坐标配置，
+    行为保持不变。一旦提供 ``boundary_geojson``，场界将从 GeoJSON
+    导入并显式投影到米制计算坐标系。
+    """
+
+    boundary_geojson: Optional[str] = None
+    layout_geojson: Optional[str] = None
+    # 源坐标参考系：EPSG:4326 / EPSG:4490(CGCS2000) 等；文件内嵌 crs 亦可
+    source_crs: Optional[str] = None
+    # 目标米制坐标系；缺省时按场址自动选择 UTM 带
+    target_crs: Optional[str] = None
+    # 本地显示坐标原点模式：bbox_center（图形以场址为中心）或 southwest
+    origin_mode: str = "bbox_center"
+    use_local_frame: bool = True
+    # 机位在场界内的判定容差 (m)
+    boundary_tolerance_m: float = 1.0
+    # 坐标正反变换往返误差约定上限 (m)
+    roundtrip_tolerance_m: float = 0.05
+    # 是否允许明显跨带场址（默认拒绝）
+    allow_cross_zone: bool = False
+    # 优化后是否导出源坐标系的 GeoJSON
+    export_geojson: bool = True
+
+
+@dataclass
 class WindFarmConfig:
     """完整的风电场分析配置。"""
     n_turbines: int = 15
@@ -74,6 +102,7 @@ class WindFarmConfig:
     optimization: OptimizationConfig = field(default_factory=OptimizationConfig)
     visualization: VisualizationConfig = field(default_factory=VisualizationConfig)
     economic: EconomicConfig = field(default_factory=EconomicConfig)
+    geo: GeoConfig = field(default_factory=GeoConfig)
 
     @classmethod
     def from_json(cls, filepath: str) -> "WindFarmConfig":
@@ -84,6 +113,7 @@ class WindFarmConfig:
         opt_config = OptimizationConfig(**data.get("optimization", {}))
         vis_config = VisualizationConfig(**data.get("visualization", {}))
         econ_config = EconomicConfig(**data.get("economic", {}))
+        geo_config = GeoConfig(**data.get("geo", {}))
 
         return cls(
             n_turbines=data.get("n_turbines", 15),
@@ -98,6 +128,7 @@ class WindFarmConfig:
             optimization=opt_config,
             visualization=vis_config,
             economic=econ_config,
+            geo=geo_config,
         )
 
     def to_json(self, filepath: str) -> None:
@@ -115,6 +146,7 @@ class WindFarmConfig:
             "optimization": self.optimization.__dict__,
             "visualization": self.visualization.__dict__,
             "economic": self.economic.__dict__,
+            "geo": self.geo.__dict__,
         }
         with open(filepath, "w", encoding="utf-8") as f:
             json.dump(data, f, indent=2, ensure_ascii=False)

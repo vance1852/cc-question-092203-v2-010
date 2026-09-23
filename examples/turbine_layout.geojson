@@ -1,0 +1,203 @@
+{
+  "type": "FeatureCollection",
+  "crs": {
+    "type": "name",
+    "properties": {
+      "name": "urn:ogc:def:crs:EPSG::4326"
+    }
+  },
+  "features": [
+    {
+      "type": "Feature",
+      "id": "WT-01",
+      "properties": {
+        "turbine_id": "WT-01",
+        "model": "V126-3.45MW",
+        "planned": true
+      },
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          114.69272835,
+          41.085449828
+        ]
+      }
+    },
+    {
+      "type": "Feature",
+      "id": "WT-02",
+      "properties": {
+        "turbine_id": "WT-02",
+        "model": "V126-3.45MW",
+        "planned": true
+      },
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          114.70105566,
+          41.085616359
+        ]
+      }
+    },
+    {
+      "type": "Feature",
+      "id": "WT-03",
+      "properties": {
+        "turbine_id": "WT-03",
+        "model": "V126-3.45MW",
+        "planned": true
+      },
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          114.709383039,
+          41.085782288
+        ]
+      }
+    },
+    {
+      "type": "Feature",
+      "id": "WT-04",
+      "properties": {
+        "turbine_id": "WT-04",
+        "model": "V126-3.45MW",
+        "planned": true
+      },
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          114.717710487,
+          41.085947616
+        ]
+      }
+    },
+    {
+      "type": "Feature",
+      "id": "WT-05",
+      "properties": {
+        "turbine_id": "WT-05",
+        "model": "V126-3.45MW",
+        "planned": true
+      },
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          114.692507819,
+          41.091750374
+        ]
+      }
+    },
+    {
+      "type": "Feature",
+      "id": "WT-06",
+      "properties": {
+        "turbine_id": "WT-06",
+        "model": "V126-3.45MW",
+        "planned": true
+      },
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          114.700835922,
+          41.091916942
+        ]
+      }
+    },
+    {
+      "type": "Feature",
+      "id": "WT-07",
+      "properties": {
+        "turbine_id": "WT-07",
+        "model": "V126-3.45MW",
+        "planned": true
+      },
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          114.709164095,
+          41.092082908
+        ]
+      }
+    },
+    {
+      "type": "Feature",
+      "id": "WT-08",
+      "properties": {
+        "turbine_id": "WT-08",
+        "model": "V126-3.45MW",
+        "planned": true
+      },
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          114.717492338,
+          41.092248273
+        ]
+      }
+    },
+    {
+      "type": "Feature",
+      "id": "WT-09",
+      "properties": {
+        "turbine_id": "WT-09",
+        "model": "V126-3.45MW",
+        "planned": true
+      },
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          114.692287217,
+          41.098050913
+        ]
+      }
+    },
+    {
+      "type": "Feature",
+      "id": "WT-10",
+      "properties": {
+        "turbine_id": "WT-10",
+        "model": "V126-3.45MW",
+        "planned": true
+      },
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          114.700616115,
+          41.098217517
+        ]
+      }
+    },
+    {
+      "type": "Feature",
+      "id": "WT-11",
+      "properties": {
+        "turbine_id": "WT-11",
+        "model": "V126-3.45MW",
+        "planned": true
+      },
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          114.708945083,
+          41.09838352
+        ]
+      }
+    },
+    {
+      "type": "Feature",
+      "id": "WT-12",
+      "properties": {
+        "turbine_id": "WT-12",
+        "model": "V126-3.45MW",
+        "planned": true
+      },
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          114.71727412,
+          41.098548921
+        ]
+      }
+    }
+  ]
+}

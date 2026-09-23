@@ -1,0 +1,53 @@
+{
+  "type": "FeatureCollection",
+  "crs": {
+    "type": "name",
+    "properties": {
+      "name": "urn:ogc:def:crs:EPSG::4326"
+    }
+  },
+  "features": [
+    {
+      "type": "Feature",
+      "properties": {
+        "site_name": "张北示例风电场",
+        "boundary_type": "site_boundary"
+      },
+      "geometry": {
+        "type": "Polygon",
+        "coordinates": [
+          [
+            [
+              114.6835,
+              41.077999999999996
+            ],
+            [
+              114.725,
+              41.0775
+            ],
+            [
+              114.727,
+              41.094
+            ],
+            [
+              114.717,
+              41.1065
+            ],
+            [
+              114.694,
+              41.107
+            ],
+            [
+              114.6825,
+              41.095
+            ],
+            [
+              114.6835,
+              41.077999999999996
+            ]
+          ]
+        ]
+      }
+    }
+  ]
+}

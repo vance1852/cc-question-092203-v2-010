@@ -98,6 +98,7 @@ class GeneticAlgorithm:
         boundary: SiteBoundary,
         fitness_fn: Callable[[np.ndarray], float],
         config: Optional[GAConfig] = None,
+        initial_positions: Optional[np.ndarray] = None,
     ) -> None:
         """
         Parameters
@@ -112,12 +113,17 @@ class GeneticAlgorithm:
             适应度函数，输入位置数组 (N_turb, 2)，返回净AEP
         config : Optional[GAConfig]
             算法配置参数
+        initial_positions : Optional[np.ndarray]
+            种子布局 (N_turb, 2)，通常来自 GeoJSON 导入的设计方案；
+            注入为初始种群的第一个个体，行顺序与机位编号一一对应。
         """
         self.n_turbines = n_turbines
         self.rotor_diameters = np.asarray(rotor_diameters, dtype=np.float64)
         self.boundary = boundary
         self.fitness_fn = fitness_fn
         self.config = config if config is not None else GAConfig()
+
+        self.initial_positions = self._check_seed(initial_positions)
 
         self.rng = np.random.default_rng(self.config.seed)
 
@@ -137,14 +143,34 @@ class GeneticAlgorithm:
         self.convergence_history: list[float] = []
         self.mean_history: list[float] = []
 
+    def _check_seed(self, positions: Optional[np.ndarray]) -> Optional[np.ndarray]:
+        """校验种子布局的形状与有限性（约束合法性在导入阶段已保证）。"""
+        if positions is None:
+            return None
+        positions = np.asarray(positions, dtype=np.float64)
+        if positions.shape != (self.n_turbines, 2):
+            raise ValueError(
+                f"种子布局形状 {positions.shape} 与要求的 "
+                f"({self.n_turbines}, 2) 不一致"
+            )
+        if not np.all(np.isfinite(positions)):
+            raise ValueError("种子布局包含非有限坐标")
+        return positions.copy()
+
     def _initialize_population(self, pop_size: int) -> np.ndarray:
         """初始化种群。
 
-        每个个体是展平的位置向量：[x1, y1, x2, y2, ..., xn, yn]
+        每个个体是展平的位置向量：[x1, y1, x2, y2, ..., xn, yn]。
+        若构造时提供了种子布局，则将其作为第一个个体注入。
         """
         population = np.zeros((pop_size, self.n_dim), dtype=np.float64)
 
-        for i in range(pop_size):
+        start = 0
+        if self.initial_positions is not None:
+            population[0] = self.initial_positions.flatten()
+            start = 1
+
+        for i in range(start, pop_size):
             positions = self._generate_valid_layout()
             population[i] = positions.flatten()
 
